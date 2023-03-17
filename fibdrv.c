@@ -6,6 +6,9 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/slab.h>
+#include "bn_kernel.c"
+
 
 MODULE_LICENSE("Dual MIT/GPL");
 MODULE_AUTHOR("National Cheng Kung University, Taiwan");
@@ -14,31 +17,183 @@ MODULE_VERSION("0.1");
 
 #define DEV_FIBONACCI_NAME "fibonacci"
 
-/* MAX_LENGTH is set to 92 because
- * ssize_t can't fit the number > 92
- */
-#define MAX_LENGTH 92
+
+
+#define MAX_LENGTH 1000
 
 static dev_t fib_dev = 0;
 static struct cdev *fib_cdev;
 static struct class *fib_class;
 static DEFINE_MUTEX(fib_mutex);
+static ktime_t kt;
 
-static long long fib_sequence(long long k)
+
+void reverse_str(char *a)
 {
-    /* FIXME: C99 variable-length array (VLA) is not allowed in Linux kernel. */
-    long long f[k + 2];
-
-    f[0] = 0;
-    f[1] = 1;
-
-    for (int i = 2; i <= k; i++) {
-        f[i] = f[i - 1] + f[i - 2];
+    size_t len = strlen(a);
+    for (int i = 0; i < len / 2; ++i) {
+        char temp = a[i];
+        a[i] = a[len - i - 1];
+        a[len - i - 1] = temp;
     }
-
-    return f[k];
 }
 
+typedef struct Bignum {
+    char element[128];
+} bn_str;
+
+
+static void string_number_add(char *a, char *b, char *out)
+{
+    reverse_str(a);
+    reverse_str(b);
+    int i;
+    int carry = 0, sum;
+    size_t size_a = strlen(a);
+    size_t size_b = strlen(b);
+    for (i = 0; i < size_b; i++) {
+        sum = (a[i] - '0') + (b[i] - '0') + carry;
+        out[i] = '0' + sum % 10;
+        carry = sum / 10;
+    }
+    for (i = size_b; i < size_a; i++) {
+        sum = (a[i] - '0') + carry;
+        out[i] = '0' + sum % 10;
+        carry = sum / 10;
+    }
+    if (carry)
+        out[i++] = '0' + carry;
+
+    out[i] = '\0';
+    reverse_str(a);
+    reverse_str(b);
+    reverse_str(out);
+}
+/*
+static long long pow1(long long base, int expo)
+{
+    long long num = 1;
+    for (int i = 0; i < expo; ++i) {
+        num = num * base;
+    }
+    return num;
+}
+static long long fib_sequence(long long k)
+{
+    long long a = 0, b = 1;
+    int lz_bit = __builtin_clzll(k);
+    long long current_digit = 1 << (64 - lz_bit - 1);
+
+    for (int i = 64 - lz_bit; i >= 1; i--) {
+        long long t1 = a * (2 * b - a);
+        long long t2 = pow1(a, 2) + pow1(b, 2);
+        a = t1;
+        b = t2;
+        if (k & current_digit) {
+            t1 = a + b;
+            a = b;
+            b = t1;
+        }
+        current_digit >>= 1;
+    }
+    return a;
+}
+*/
+
+void fib_sequence_bn(long long k, bn *dest)
+{
+    bn_resize(dest, 1);
+    if (k < 2) {  // Fib(0) = 0, Fib(1) = 1
+        dest->number[0] = k;
+        return;
+    }
+
+    bn *a = bn_alloc(1);
+    bn *b = bn_alloc(1);
+    dest->number[0] = 1;
+
+    for (unsigned int i = 1; i < k; i++) {
+        bn_swap(b, dest);
+        bn_add(a, b, dest);
+        bn_swap(a, b);
+    }
+    bn_free(a);
+    bn_free(b);
+}
+void fib_sequence_fastd(long long k, bn *dest)
+{
+    bn_resize(dest, 1);
+    if (k < 2) {  // Fib(0) = 0, Fib(1) = 1
+        dest->number[0] = k;
+        return;
+    }
+
+    bn *f1 = bn_alloc(1);
+    bn *f2 = dest;
+    f1->number[0] = 0;
+    f2->number[0] = 1;
+    bn *k1 = bn_alloc(1);
+    bn *k2 = bn_alloc(1);
+
+    for (unsigned int i = 1U << (30 - __builtin_clz(k)); i; i >>= 1) {
+        /* F(2k) = F(k) * [ 2 * F(k-1) + F(k) ] */
+        bn_add(f1, f1, k1);
+        bn_add(k1, f2, k1);
+        bn_mult(k1, f2, k2);
+        // F(2k-1) = F(k)^2 + F(k-1)^2
+        bn_mult(f2, f2, k1);
+        bn_swap(f2, k2);
+        bn_mult(f1, f1, k2);
+        bn_add(k1, k2, f1);
+        // bn_swap(f1,k1);
+        if (k & i) {
+            bn_swap(f1, f2);
+            bn_add(f1, f2, f2);
+        }
+    }
+    bn_free(f1);
+    bn_free(k1);
+    bn_free(k2);
+}
+static long long fib_sequence_str(long long k, char *buf)
+{
+    bn_str *f = kmalloc(sizeof(bn_str) * (k + 2), GFP_KERNEL);
+
+    strncpy(f[0].element, "0", 1);
+    f[0].element[1] = '\0';
+    strncpy(f[1].element, "1", 1);
+    f[1].element[1] = '\0';
+    for (int i = 2; i <= k; ++i) {
+        string_number_add(f[i - 1].element, f[i - 2].element, f[i].element);
+    }
+    unsigned long ret_size = strlen(f[k].element) + 1;
+    unsigned long long test = __copy_to_user(buf, f[k].element, ret_size);
+    if (test) {
+        printk("The copy from kernel to user is fail.");
+        return -1;
+    }
+    return ret_size;
+}
+// cppcheck-suppress unusedFunction
+static long long fib_time_proxy(long long k, char *buf, int ctrl)
+{
+    long long result = 0;
+    kt = ktime_get();
+    switch (ctrl) {
+    case 1:
+        // result = fib_sequence_str(k, buf);
+        break;
+    case 2:
+        // fib_sequence_bn(k, buf);
+        break;
+    case 3:
+        // result = fib_sequence_fastd(k, buf);
+        break;
+    }
+    kt = ktime_sub(ktime_get(), kt);
+
+    return result;
+}
 static int fib_open(struct inode *inode, struct file *file)
 {
     if (!mutex_trylock(&fib_mutex)) {
@@ -60,16 +215,35 @@ static ssize_t fib_read(struct file *file,
                         size_t size,
                         loff_t *offset)
 {
-    return (ssize_t) fib_sequence(*offset);
-}
+    bool doubling = false;
+    bn *res = bn_alloc(1);
+    if (doubling) {
+        kt = ktime_get();
+        fib_sequence_fastd(*offset, res);
+        kt = ktime_sub(ktime_get(), kt);
+    } else {
+        kt = ktime_get();
+        fib_sequence_bn(*offset, res);
+        kt = ktime_sub(ktime_get(), kt);
+    }
+    char *p = bn_to_string(res);
+    size_t sz = strlen(p) + 1;
+    access_ok(buf, size);
+    __copy_to_user(buf, p, sz);
+    bn_free(res);
 
+    return 1;
+
+    // return (ssize_t) fib_time_proxy(*offset, buf, ctrl);
+    //  return fib_sequence(*offset,buf);
+}
 /* write operation is skipped */
 static ssize_t fib_write(struct file *file,
                          const char *buf,
                          size_t size,
                          loff_t *offset)
 {
-    return 1;
+    return ktime_to_ns(kt);
 }
 
 static loff_t fib_device_lseek(struct file *file, loff_t offset, int orig)

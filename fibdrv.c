@@ -19,7 +19,7 @@ MODULE_VERSION("0.1");
 
 
 
-#define MAX_LENGTH 1000
+#define MAX_LENGTH 10000
 
 static dev_t fib_dev = 0;
 static struct cdev *fib_cdev;
@@ -215,7 +215,7 @@ static ssize_t fib_read(struct file *file,
                         size_t size,
                         loff_t *offset)
 {
-    bool doubling = false;
+    bool doubling = true;
     bn *res = bn_alloc(1);
     if (doubling) {
         kt = ktime_get();

@@ -17,9 +17,9 @@ static inline long long u_ntime()
 
 int main()
 {
-    char buf[500];
+    char buf[100000];
     char write_buf[] = "testing writing";
-    int offset = 100; /* TODO: try test something bigger than the limit */
+    int offset = 2000; /* TODO: try test something bigger than the limit */
 
 
     FILE *data = fopen("datav2.txt", "w");

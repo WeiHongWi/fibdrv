@@ -21,6 +21,7 @@
 #define DIV_ROUNDUP(x, len) (((x) + (len) -1) / (len))
 #endif
 
+
 /* count leading zeros of src*/
 static int bn_clz(const bn *src)
 {
@@ -216,10 +217,12 @@ int bn_cmp(const bn *a, const bn *b)
 static void bn_do_add(const bn *a, const bn *b, bn *c)
 {
     // max digits = max(sizeof(a) + sizeof(b)) + 1
+    // int d = MAX(bn_msb(a), bn_msb(b));
     int d = MAX(bn_msb(a), bn_msb(b)) + 1;
     d = DIV_ROUNDUP(d, 32) + !d;
     bn_resize(c, d);  // round up, min size = 1
 
+    // unsigned int carry = 0;
     unsigned long long int carry = 0;
     for (int i = 0; i < c->size; i++) {
         unsigned int tmp1 = (i < a->size) ? a->number[i] : 0;
@@ -228,9 +231,27 @@ static void bn_do_add(const bn *a, const bn *b, bn *c)
         c->number[i] = carry;
         carry >>= 32;
     }
-
     if (!c->number[c->size - 1] && c->size > 1)
         bn_resize(c, c->size - 1);
+    /*
+    for (int i = 0; i < a->size; ++i) {
+        unsigned int tmp1 = a->number[i];
+        unsigned int tmp2 = b->number[i];
+        carry = (tmp2 += carry) < carry;
+        carry += (c->number[i] = tmp1 + tmp2) < tmp1;
+    }
+    if (b->size > a->size) {
+        for (int i = a->size; i < b->size; ++i) {
+            unsigned int tmp = b->number[i];
+            carry = (tmp += carry) < carry;
+            c->number[i] = tmp;
+        }
+    }
+
+    if (carry) {
+        c->number[b->size] = carry;
+        ++(c->size);
+    }*/
 }
 
 /*
@@ -308,6 +329,7 @@ void bn_sub(const bn *a, const bn *b, bn *c)
 }*/
 
 /* c += x, starting from offset */
+/*
 static void bn_mult_add(bn *c, int offset, unsigned long long int x)
 {
     unsigned long long int carry = 0;
@@ -319,8 +341,55 @@ static void bn_mult_add(bn *c, int offset, unsigned long long int x)
         if (!x && !carry)  // done
             return;
     }
-}
+}*/
 
+static unsigned int bn_mult_partial(const unsigned int *num,
+                                    unsigned int sz,
+                                    unsigned int b,
+                                    unsigned int *c)
+{
+    if (b == 0) {
+        return 0;
+    }
+    unsigned long long carry = 0;
+    for (int i = 0; i < sz; ++i) {
+        unsigned int high, low;
+        unsigned long long product = (unsigned long long) num[i] * b;
+        low = product;
+        high = product >> 32;
+        carry = high + ((low += carry) < carry);
+        carry += ((c[i] += low) < low);
+    }
+    return carry;
+} /*
+ void bn_sqrt_base(const unsigned int *a, unsigned int sz, unsigned int *c)
+ {
+     unsigned int *cp = c + 1;
+     unsigned int asize = sz - 1;
+     const unsigned int *ap = a;
+     for (int i = 0; i < asize; ++i) {
+         cp[asize - i] = bn_mult_partial(&ap[i+1], asize-i, ap[i], cp);
+         cp += 2;
+     }
+     for (int i = 2 * sz - 1; i > 0; i--)
+         c[i] = c[i] << 1 | c[i - 1] >> (31);
+     c[0] <<= 1;
+
+     cp = c;
+     ap = a;
+     asize = sz;
+     unsigned long long carry = 0;
+     for (int i = 0; i < asize; i++) {
+         unsigned int high, low;
+     unsigned long long product = (unsigned long long)ap[i] * ap[i];
+     low = product;
+     high = product >> 32;
+         high += (low += carry) < carry;
+         high += (cp[0] += low) < low;
+         carry = (cp[1] += high) < high;
+         cp += 2;
+     }
+ }*/
 /*
  * c = a x b
  * Note: work for c == a or c == b
@@ -342,13 +411,19 @@ void bn_mult(const bn *a, const bn *b, bn *c)
             c->number[i] = 0;
         bn_resize(c, d);
     }
-
+    /*
     for (int i = 0; i < a->size; i++) {
         for (int j = 0; j < b->size; j++) {
             unsigned long long int carry = 0;
             carry = (unsigned long long int) a->number[i] * b->number[j];
             bn_mult_add(c, i + j, carry);
         }
+    }
+    */
+
+    for (int i = 0; i < a->size; ++i) {
+        c->number[a->size + i] =
+            bn_mult_partial(a->number, a->size, b->number[i], c->number + i);
     }
     c->sign = a->sign ^ b->sign;
 
@@ -377,4 +452,3 @@ void bn_mult(const bn *a, const bn *b, bn *c)
     bn_free(a);
     bn_free(b);
 }*/
-
